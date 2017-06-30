@@ -7,6 +7,9 @@
 #include <stdarg.h>
 #include <limits.h>
 #include <locale.h>
+#include <map>
+#include <vector>
+#include <fstream>
 #include "svm.h"
 int libsvm_version = LIBSVM_VERSION;
 typedef float Qfloat;
@@ -1889,6 +1892,106 @@ static void multiclass_probability(int k, double **r, double *p)
 	free(Qp);
 }
 
+//Generates inverse permutation (current_index of data -> origina_index of data to
+// original_index of data to current_index)
+int *generateInvPerm(const int * const current_perm, int sz)
+{
+    int *ret = Malloc(int, sz);
+    for(int i = 0 ; i < sz; i++)
+    {
+        ret[current_perm[i]] = i;
+    }
+    return ret;
+}
+
+static void svm_binary_svc_probability_controlled_grouping(
+    const svm_problem *prob, const svm_parameter *param,
+    double Cp, double Cn, double& probA, double& probB,
+    const int * const cur_perm,
+    const std::map<int,std::vector<int> > &grouping_info)
+{
+    info("Using controlled grouping info for svm_binary_svc_probability\n");
+    int *inv_perm = generateInvPerm(cur_perm, prob->l);
+    double *dec_values = Malloc(double,prob->l);
+    for(std::map<int, std::vector<int> >::const_iterator it = grouping_info.begin(); it != grouping_info.end(); it++)
+    {
+        int j,k;
+        struct svm_problem subprob;
+
+        subprob.l = (int)(prob->l - (it->second).size());
+        subprob.x = Malloc(struct svm_node*,subprob.l);
+        subprob.y = Malloc(double,subprob.l);
+
+        k=0;
+        std::map<int, std::vector<int> >::const_iterator it2 = grouping_info.begin();
+        for(; it2 != it; it2++)
+        {
+            const std::vector<int> &v = it2->second;
+            for(size_t pos = 0; pos < v.size(); pos++)
+            {
+                subprob.x[k] = prob->x[inv_perm[v[pos]]];
+                subprob.y[k] = prob->y[inv_perm[v[pos]]];
+                ++k;
+            }
+        }
+        it2++;
+        for(; it2 != grouping_info.end(); it2++)
+        {
+            const std::vector<int> &v = it2->second;
+            for(size_t pos = 0; pos < v.size(); pos++)
+            {
+                subprob.x[k] = prob->x[inv_perm[v[pos]]];
+                subprob.y[k] = prob->y[inv_perm[v[pos]]];
+                ++k;
+            }
+        }
+        int p_count=0,n_count=0;
+        for(j=0;j<k;j++)
+            if(subprob.y[j]>0)
+                p_count++;
+            else
+                n_count++;
+        const std::vector<int> &v = it->second;
+        if(p_count==0 && n_count==0)
+            for(j=0;j<(int)v.size();j++)
+                dec_values[inv_perm[v[j]]] = 0;
+        else if(p_count > 0 && n_count == 0)
+            for(j=0;j<(int)v.size();j++)
+                dec_values[inv_perm[v[j]]] = 1;
+        else if(p_count == 0 && n_count > 0)
+            for(j=0;j<(int)v.size();j++)
+                dec_values[inv_perm[v[j]]] = -1;
+        else
+        {
+            svm_parameter subparam = *param;
+            subparam.probability=0;
+            subparam.C=1.0;
+            subparam.nr_weight=2;
+            subparam.weight_label = Malloc(int,2);
+            subparam.weight = Malloc(double,2);
+            subparam.weight_label[0]=+1;
+            subparam.weight_label[1]=-1;
+            subparam.weight[0]=Cp;
+            subparam.weight[1]=Cn;
+            struct svm_model *submodel = svm_train(&subprob,&subparam);
+            for(j=0;j<(int)v.size();j++)
+            {
+                svm_predict_values(submodel,prob->x[inv_perm[v[j]]],&(dec_values[inv_perm[v[j]]]));
+                // ensure +1 -1 order; reason not using CV subroutine
+                dec_values[inv_perm[v[j]]] *= submodel->label[0];
+            }
+            svm_free_and_destroy_model(&submodel);
+            svm_destroy_param(&subparam);
+        }
+        free(subprob.x);
+        free(subprob.y);
+    }
+    sigmoid_train(prob->l,dec_values,prob->y,probA,probB);
+    free(dec_values);
+    free(inv_perm);
+}
+
+
 // Cross-validation decision values for probability estimates
 static void svm_binary_svc_probability(
 	const svm_problem *prob, const svm_parameter *param,
@@ -2086,6 +2189,32 @@ static void svm_group_classes(const svm_problem *prob, int *nr_class_ret, int **
 	free(data_label);
 }
 
+
+void load_probabilty_est_grouping_info_file(const char *probabilty_est_grouping_info_file,
+                                            const int total_data,
+                                            std::map<int, std::vector<int> >  &prob_est_grouping)
+{
+    std::ifstream in(probabilty_est_grouping_info_file);
+    int group_idx;
+    for(int i = 0; i < total_data; i++)
+    {
+        if(in >> group_idx)
+        {
+            if(prob_est_grouping.find(group_idx) == prob_est_grouping.end())
+            {
+                prob_est_grouping[group_idx] = std::vector<int>();
+            }
+            prob_est_grouping[group_idx].push_back(i);
+        }
+        else
+        {
+            throw std::runtime_error("Error loading probability estimation controlled cross validation info file; "
+                    "number of grouping info provided is less than number of data");
+        }
+    }
+
+}
+
 //
 // Interface functions
 //
@@ -2181,12 +2310,22 @@ svm_model *svm_train(const svm_problem *prob, const svm_parameter *param)
 		for(i=0;i<l;i++)
 			nonzero[i] = false;
 		decision_function *f = Malloc(decision_function,nr_class*(nr_class-1)/2);
-
+		std::map<int, std::vector<int> > prob_est_grouping;
 		double *probA=NULL,*probB=NULL;
 		if (param->probability)
 		{
 			probA=Malloc(double,nr_class*(nr_class-1)/2);
 			probB=Malloc(double,nr_class*(nr_class-1)/2);
+            if(prob->probabilty_est_grouping_info_file != NULL)
+			{
+			    if(nr_class != 2)
+			    {
+			        throw std::runtime_error("Controlled grouping for probability estimation is only supported for binary classification");
+			    }
+			    load_probabilty_est_grouping_info_file(prob->probabilty_est_grouping_info_file,
+			                                           prob->l,
+			                                           prob_est_grouping);
+			}
 		}
 
 		int p = 0;
@@ -2210,9 +2349,20 @@ svm_model *svm_train(const svm_problem *prob, const svm_parameter *param)
 					sub_prob.x[ci+k] = x[sj+k];
 					sub_prob.y[ci+k] = -1;
 				}
+                
 
 				if(param->probability)
-					svm_binary_svc_probability(&sub_prob,param,weighted_C[i],weighted_C[j],probA[p],probB[p]);
+                {
+                    if(prob->probabilty_est_grouping_info_file != NULL)
+				    {
+				        svm_binary_svc_probability_controlled_grouping(&sub_prob,param,weighted_C[i],weighted_C[j],probA[p],probB[p],
+				                                                       perm, prob_est_grouping);
+				    }
+				    else
+				    {
+				        svm_binary_svc_probability(&sub_prob,param,weighted_C[i],weighted_C[j],probA[p],probB[p]);
+				    }
+                }
 
 				f[p] = svm_train_one(&sub_prob,param,weighted_C[i],weighted_C[j]);
 				for(k=0;k<ci;k++)
@@ -3160,7 +3310,20 @@ const char *svm_check_parameter(const svm_problem *prob, const svm_parameter *pa
 		free(label);
 		free(count);
 	}
-
+    if(prob->probabilty_est_grouping_info_file != NULL)
+	{
+	    if(param->svm_type == ONE_CLASS ||
+	            param->svm_type == EPSILON_SVR ||
+	            param->svm_type == NU_SVR)
+	    {
+	        return "Controlled grouping for probability estimation is only available for classification type svms";
+	    }
+	    if(!param->probability)
+	    {
+	        return "Controlled grouping for probability estimation is only applicable when we are building a "
+	                "model with probability estimates";
+	    }
+	}
 	return NULL;
 }
 

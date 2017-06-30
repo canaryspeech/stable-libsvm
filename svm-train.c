@@ -37,6 +37,7 @@ void exit_with_help()
 	"-b probability_estimates : whether to train a SVC or SVR model for probability estimates, 0 or 1 (default 0)\n"
 	"-wi weight : set the parameter C of class i to weight*C, for C-SVC (default 1)\n"
 	"-v n: n-fold cross validation mode\n"
+    "-f controlled_grouping_information_file: the file that contains grouping info for cross validation in svm_binary_svc_probability\n"
 	"-q : quiet mode (no outputs)\n"
 	);
 	exit(1);
@@ -59,6 +60,7 @@ struct svm_node *x_space;
 int cross_validation;
 int nr_fold;
 
+static char *svm_probabilty_estimation_grouping_info_file = NULL;
 static char *line = NULL;
 static int max_line_len;
 
@@ -115,7 +117,7 @@ int main(int argc, char **argv)
 	free(prob.x);
 	free(x_space);
 	free(line);
-
+	free(svm_probabilty_estimation_grouping_info_file);
 	return 0;
 }
 
@@ -245,6 +247,10 @@ void parse_command_line(int argc, char **argv, char *input_file_name, char *mode
 				param.weight_label[param.nr_weight-1] = atoi(&argv[i-1][2]);
 				param.weight[param.nr_weight-1] = atof(argv[i]);
 				break;
+			case 'f':
+			    svm_probabilty_estimation_grouping_info_file = Malloc(char, strlen(argv[i - 1]) + 1);
+			    strcpy(svm_probabilty_estimation_grouping_info_file, argv[i]);
+			    break;
 			default:
 				fprintf(stderr,"Unknown option: -%c\n", argv[i-1][1]);
 				exit_with_help();
@@ -290,6 +296,7 @@ void read_problem(const char *filename)
 	}
 
 	prob.l = 0;
+    prob.probabilty_est_grouping_info_file = svm_probabilty_estimation_grouping_info_file;
 	elements = 0;
 
 	max_line_len = 1024;

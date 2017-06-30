@@ -20,6 +20,7 @@ struct svm_problem
 	int l;
 	double *y;
 	struct svm_node **x;
+    char *probabilty_est_grouping_info_file;
 };
 
 enum { C_SVC, NU_SVC, ONE_CLASS, EPSILON_SVR, NU_SVR };	/* svm_type */

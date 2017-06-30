@@ -117,6 +117,7 @@ def svm_train(arg1, arg2=None, arg3=None):
 	    -h shrinking : whether to use the shrinking heuristics, 0 or 1 (default 1)
 	    -b probability_estimates : whether to train a SVC or SVR model for probability estimates, 0 or 1 (default 0)
 	    -wi weight : set the parameter C of class i to weight*C, for C-SVC (default 1)
+        -f controlled_grouping_information_file: the file that contains grouping info for cross validation in svm_binary_svc_probability
 	    -v n: n-fold cross validation mode
 	    -q : quiet mode (no outputs)
 	"""
@@ -125,7 +126,7 @@ def svm_train(arg1, arg2=None, arg3=None):
 		assert isinstance(arg2, (list, tuple))
 		y, x, options = arg1, arg2, arg3
 		param = svm_parameter(options)
-		prob = svm_problem(y, x, isKernel=(param.kernel_type == PRECOMPUTED))
+		prob = svm_problem(y, x, param.probabilty_est_grouping_info_file, isKernel=(param.kernel_type == PRECOMPUTED))
 	elif isinstance(arg1, svm_problem):
 		prob = arg1
 		if isinstance(arg2, svm_parameter):
@@ -258,5 +259,3 @@ def svm_predict(y, x, m, options=""):
 		info("Accuracy = %g%% (%d/%d) (classification)" % (ACC, int(l*ACC/100), l))
 
 	return pred_labels, (ACC, MSE, SCC), pred_values
-
-

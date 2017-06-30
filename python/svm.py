@@ -88,11 +88,11 @@ def gen_svm_nodearray(xi, feature_max=None, isKernel=None):
 	return ret, max_idx
 
 class svm_problem(Structure):
-	_names = ["l", "y", "x"]
-	_types = [c_int, POINTER(c_double), POINTER(POINTER(svm_node))]
+	_names = ["l", "y", "x", "probabilty_est_grouping_info_file"]
+	_types = [c_int, POINTER(c_double), POINTER(POINTER(svm_node)), c_char_p]
 	_fields_ = genFields(_names, _types)
 
-	def __init__(self, y, x, isKernel=None):
+	def __init__(self, y, x, probabilty_est_grouping_info_file=None, isKernel=None):
 		if len(y) != len(x):
 			raise ValueError("len(y) != len(x)")
 		self.l = l = len(y)
@@ -110,11 +110,14 @@ class svm_problem(Structure):
 
 		self.x = (POINTER(svm_node) * l)()
 		for i, xi in enumerate(self.x_space): self.x[i] = xi
+        #got it from here: https://stackoverflow.com/questions/27127413/converting-python-string-object-to-c-char-using-ctypes
+		if probabilty_est_grouping_info_file != None:
+			self.probabilty_est_grouping_info_file = c_char_p(probabilty_est_grouping_info_file.encode('utf-8'))
 
 class svm_parameter(Structure):
 	_names = ["svm_type", "kernel_type", "degree", "gamma", "coef0",
 			"cache_size", "eps", "C", "nr_weight", "weight_label", "weight",
-			"nu", "p", "shrinking", "probability"]
+			"nu", "p", "shrinking", "probability", "probabilty_est_grouping_info_file"]
 	_types = [c_int, c_int, c_int, c_double, c_double,
 			c_double, c_double, c_double, c_int, POINTER(c_int), POINTER(c_double),
 			c_double, c_double, c_int, c_int]
@@ -154,6 +157,7 @@ class svm_parameter(Structure):
 		self.cross_validation = False
 		self.nr_fold = 0
 		self.print_func = cast(None, PRINT_STRING_FUN)
+		self.probabilty_est_grouping_info_file = None
 
 	def parse_options(self, options):
 		if isinstance(options, list):
@@ -218,6 +222,9 @@ class svm_parameter(Structure):
 				self.nr_weight += 1
 				weight_label += [int(argv[i-1][2:])]
 				weight += [float(argv[i])]
+			elif argv[i] == "-f":
+				i = i + 1
+				self.probabilty_est_grouping_info_file = argv[i];
 			else:
 				raise ValueError("Wrong options")
 			i += 1
