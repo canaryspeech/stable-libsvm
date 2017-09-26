@@ -10,6 +10,7 @@
 #include <map>
 #include <vector>
 #include <fstream>
+#include <stdexcept>
 #include "svm.h"
 int libsvm_version = LIBSVM_VERSION;
 typedef float Qfloat;
